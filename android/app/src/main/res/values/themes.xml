@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ANIXApp" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF09090D</item>
+        <item name="android:navigationBarColor">#FF09090D</item>
+        <item name="android:windowBackground">#FF09090D</item>
+    </style>
+</resources>

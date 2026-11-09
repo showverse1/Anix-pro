@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="anix_background">#FF09090D</color>
+    <color name="anix_surface">#BF12121E</color>
+    <color name="anix_primary_neon_crimson">#FFFF2A55</color>
+    <color name="anix_vip_gold">#FFFFD700</color>
+    <color name="anix_cyan">#FF00F0FF</color>
+    <color name="anix_surface_border">#14FFFFFF</color>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "ANIX App - Cyberpunk Anime Streaming",
+  "description": "Production-ready Android streaming app with Jetpack Compose Material 3, dual-engine ExoPlayer and anti-ad WebView sandbox, UPI native subscriptions, creator admin dashboard, and GitHub Actions CI/CD APK pipeline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,29 +1,45 @@
-import { CurrentUserSubscription, MediaItem, SubscriptionTransaction } from '../types';
-import { INITIAL_MEDIA_ITEMS } from '../data/mockData';
+import {
+  AppUpdateInfo,
+  CurrentUserSubscription,
+  DownloadedItem,
+  MediaItem,
+  SubscriptionTransaction,
+} from '../types';
+import { DEFAULT_APP_UPDATE, INITIAL_MEDIA_ITEMS } from '../data/mockData';
 
 const MEDIA_STORAGE_KEY = 'anix_firestore_media';
 const SUBSCRIPTIONS_STORAGE_KEY = 'anix_firestore_subscriptions';
 const USER_SUB_KEY = 'anix_firestore_user_sub';
+const DOWNLOADS_STORAGE_KEY = 'anix_downloads_v2';
+const APP_UPDATE_STORAGE_KEY = 'anix_app_update_latest';
 
 export const storageService = {
-  // Load /media items
-  getMediaItems(): MediaItem[] {
+  // Load /media items (STRICTLY filter status === 'PUBLISHED')
+  getMediaItems(includeDrafts: boolean = false): MediaItem[] {
     try {
       const stored = localStorage.getItem(MEDIA_STORAGE_KEY);
+      let items: MediaItem[] = [];
       if (stored) {
-        return JSON.parse(stored);
+        items = JSON.parse(stored);
+      } else {
+        items = INITIAL_MEDIA_ITEMS;
+        localStorage.setItem(MEDIA_STORAGE_KEY, JSON.stringify(items));
       }
+
+      if (includeDrafts) {
+        return items;
+      }
+      // Strictly query & display PUBLISHED only!
+      return items.filter((m) => m.status === 'PUBLISHED');
     } catch (e) {
       console.error('Failed to load media items from storage', e);
+      return INITIAL_MEDIA_ITEMS.filter((m) => m.status === 'PUBLISHED');
     }
-    // Initialize default catalog
-    localStorage.setItem(MEDIA_STORAGE_KEY, JSON.stringify(INITIAL_MEDIA_ITEMS));
-    return INITIAL_MEDIA_ITEMS;
   },
 
   // Save / update media item
   saveMediaItem(item: MediaItem): void {
-    const items = this.getMediaItems();
+    const items = this.getMediaItems(true); // include drafts to mutate
     const index = items.findIndex((i) => i.id === item.id);
     if (index >= 0) {
       items[index] = { ...item, updatedAt: new Date().toISOString() };
@@ -41,7 +57,7 @@ export const storageService = {
 
   // Delete media item
   deleteMediaItem(id: string): void {
-    const items = this.getMediaItems().filter((i) => i.id !== id);
+    const items = this.getMediaItems(true).filter((i) => i.id !== id);
     localStorage.setItem(MEDIA_STORAGE_KEY, JSON.stringify(items));
     window.dispatchEvent(new Event('anix_media_changed'));
   },
@@ -78,7 +94,7 @@ export const storageService = {
     planDays: number,
     amount: number,
     userId: string = 'user_anix_001',
-    userEmail: string = 'user_demo@anix.stream'
+    userEmail: string = 'verseshow94@gmail.com'
   ): { success: boolean; message: string; sub?: CurrentUserSubscription } {
     const trimmedUtr = utr.trim();
 
@@ -91,7 +107,6 @@ export const storageService = {
     }
 
     const subs = this.getSubscriptions();
-    // Check duplicate UTR
     const isDuplicate = subs.some((s) => s.transactionId === trimmedUtr);
     if (isDuplicate) {
       return {
@@ -119,7 +134,7 @@ export const storageService = {
     subs.unshift(newTxn);
     localStorage.setItem(SUBSCRIPTIONS_STORAGE_KEY, JSON.stringify(subs));
 
-    // Update /users/{uid}/subscription/current
+    // Update /users/{uid}/subscription/current (EncryptedSharedPreferences mirror)
     const currentSub: CurrentUserSubscription = {
       isVip: true,
       planDays,
@@ -134,7 +149,7 @@ export const storageService = {
 
     return {
       success: true,
-      message: `VIP Activated! ${planDays} Days of Ad-Free & High-Bitrate access unlocked.`,
+      message: `VIP Activated! ${planDays} Days of Ultra-Fast 1080p, Offline Downloads & Zero Ads unlocked.`,
       sub: currentSub,
     };
   },
@@ -159,7 +174,6 @@ export const storageService = {
     };
   },
 
-  // Toggle VIP directly (helpful for debugging/demoing)
   toggleVipDirect(enable?: boolean): CurrentUserSubscription {
     const current = this.getUserSubscription();
     const shouldEnable = enable !== undefined ? enable : !current.isVip;
@@ -180,9 +194,90 @@ export const storageService = {
     return newSub;
   },
 
-  // Reset demo catalog
+  // VIP Download Manager Storage
+  getDownloads(): DownloadedItem[] {
+    try {
+      const stored = localStorage.getItem(DOWNLOADS_STORAGE_KEY);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    // Pre-populate with initial downloaded episodes
+    const initialList: DownloadedItem[] = [
+      {
+        id: 'dl-item-001',
+        mediaId: 'anix-001',
+        title: 'Cyberpunk: Neon Genesis 2099',
+        altTitle: '新世紀サイバーパンク：2099',
+        episodeId: 'ep-001-1',
+        episodeNumber: 1,
+        seasonNumber: 1,
+        quality: '1080p FHD',
+        fileSizeBytes: 495000000, // 495 MB
+        thumbnail: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600',
+        downloadedAt: 'Today, 10:15 AM',
+        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+        media: INITIAL_MEDIA_ITEMS[0],
+      },
+      {
+        id: 'dl-item-002',
+        mediaId: 'anix-003',
+        title: 'Archive Chronicles: Retro Odyssey',
+        altTitle: 'アーカイブ年代記：レトロ・オデッセイ',
+        episodeId: 'ep-003-1',
+        episodeNumber: 1,
+        seasonNumber: 1,
+        quality: '720p HD',
+        fileSizeBytes: 310000000, // 310 MB
+        thumbnail: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=600',
+        downloadedAt: 'Yesterday',
+        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+        media: INITIAL_MEDIA_ITEMS[2],
+      },
+    ];
+    localStorage.setItem(DOWNLOADS_STORAGE_KEY, JSON.stringify(initialList));
+    return initialList;
+  },
+
+  saveDownload(item: DownloadedItem): void {
+    const list = this.getDownloads();
+    if (!list.some((d) => d.id === item.id)) {
+      list.unshift(item);
+      localStorage.setItem(DOWNLOADS_STORAGE_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('anix_downloads_changed'));
+    }
+  },
+
+  deleteDownload(id: string): void {
+    const list = this.getDownloads().filter((d) => d.id !== id);
+    localStorage.setItem(DOWNLOADS_STORAGE_KEY, JSON.stringify(list));
+    window.dispatchEvent(new Event('anix_downloads_changed'));
+  },
+
+  // App Updates Collection (/app_updates/latest)
+  getAppUpdate(): AppUpdateInfo {
+    try {
+      const stored = localStorage.getItem(APP_UPDATE_STORAGE_KEY);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return DEFAULT_APP_UPDATE;
+  },
+
+  saveAppUpdate(update: AppUpdateInfo): void {
+    localStorage.setItem(APP_UPDATE_STORAGE_KEY, JSON.stringify(update));
+    window.dispatchEvent(new Event('anix_app_update_changed'));
+  },
+
   resetToDefaultCatalog(): void {
     localStorage.setItem(MEDIA_STORAGE_KEY, JSON.stringify(INITIAL_MEDIA_ITEMS));
+    localStorage.setItem(APP_UPDATE_STORAGE_KEY, JSON.stringify(DEFAULT_APP_UPDATE));
     window.dispatchEvent(new Event('anix_media_changed'));
+    window.dispatchEvent(new Event('anix_app_update_changed'));
   },
 };

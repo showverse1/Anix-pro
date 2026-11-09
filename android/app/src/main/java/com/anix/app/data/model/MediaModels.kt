@@ -8,51 +8,65 @@ enum class StreamType {
     ABYSS,
     MUX,
     DEMUX,
-    ECDN
+    ECDN,
+    ARCHIVE
 }
 
 data class SubtitleTrack(
     val language: String = "English",
-    val code: String = "en",
+    val languageCode: String = "en",
     val url: String = "",
     val isDefault: Boolean = false
 )
 
-data class Episode(
+data class EpisodeItem(
+    val id: String = "",
     val episodeNumber: Int = 1,
+    val seasonNumber: Int = 1,
     val title: String = "",
     val duration: String = "24m",
-    val thumbnail: String = "",
     val videoUrl: String = "",
-    val streamType: String = StreamType.HLS.name
+    val videoUrl480p: String = "",
+    val videoUrl720p: String = "",
+    val videoUrl1080p: String = "",
+    val streamType: String = StreamType.HLS.name,
+    val subtitles: List<SubtitleTrack> = emptyList()
 )
 
 data class MediaItem(
     val id: String = "",
     val title: String = "",
-    val altTitle: String = "",
+    val altTitle: String = "", // Original Japanese title rendered in Gold #FFD700
     val description: String = "",
     val posterUrl: String = "",
     val bannerUrl: String = "",
-    val category: String = "Anime", // Action, Sci-Fi, Cyberpunk, Shonen, etc.
+    val category: String = "Anime", // "Anime", "Series", "Drama", "Movies"
     val rating: Double = 9.0,
-    val releaseYear: Int = 2024,
+    val releaseYear: String = "2024",
+    val duration: String = "24m/ep",
     val ageRating: String = "16+",
-    val audioLanguages: List<String> = listOf("Japanese", "English Dub"),
-    val status: String = "Ongoing",
+    val audioLanguages: String = "Japanese, Hindi Sub",
+    val status: String = "PUBLISHED", // "PUBLISHED" vs "DRAFT" - strictly display PUBLISHED only
     
-    // Multi-quality streams & default
+    // Multi-Stream URLs
     val videoUrl: String = "",
     val videoUrl480p: String = "",
     val videoUrl720p: String = "",
     val videoUrl1080p: String = "",
     val streamType: String = StreamType.HLS.name,
     
-    // Nested arrays
-    val episodes: List<Episode> = emptyList(),
+    val episodes: List<EpisodeItem> = emptyList(),
     val subtitles: List<SubtitleTrack> = emptyList(),
-    
-    // Timestamps
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
+)
+
+data class AppUpdateInfo(
+    val versionCode: Int = 100,
+    val versionName: String = "1.0.0",
+    val title: String = "",
+    val changelog: String = "",
+    val downloadUrl: String = "",
+    val forceUpdate: Boolean = false,
+    val broadcastActive: Boolean = false
 )

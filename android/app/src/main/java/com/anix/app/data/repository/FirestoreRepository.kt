@@ -1,5 +1,6 @@
 package com.anix.app.data.repository
 
+import com.anix.app.data.model.AppUpdateInfo
 import com.anix.app.data.model.CurrentUserSubscription
 import com.anix.app.data.model.MediaItem
 import com.anix.app.data.model.SubscriptionTransaction
@@ -16,11 +17,12 @@ class FirestoreRepository(
 ) {
 
     /**
-     * Real-time Kotlin Flow observing the Anime & Series catalog
+     * Real-time Kotlin Flow observing only PUBLISHED Anime & Series catalog
+     * Strictly queries status == "PUBLISHED"
      */
     fun observeMediaCatalog(): Flow<List<MediaItem>> = callbackFlow {
         val listenerRegistration = firestore.collection("media")
-            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .whereEqualTo("status", "PUBLISHED")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     close(error)
@@ -35,8 +37,24 @@ class FirestoreRepository(
     }
 
     /**
+     * Real-time Kotlin Flow observing remote app update broadcast (/app_updates/latest)
+     */
+    fun observeAppUpdate(): Flow<AppUpdateInfo?> = callbackFlow {
+        val listenerRegistration = firestore.collection("app_updates")
+            .document("latest")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                val update = snapshot?.toObject(AppUpdateInfo::class.java)
+                trySend(update)
+            }
+        awaitClose { listenerRegistration.remove() }
+    }
+
+    /**
      * Real-time Kotlin Flow observing user subscription state
-     * /users/{uid}/subscription/current
      */
     fun observeUserSubscription(userId: String): Flow<CurrentUserSubscription?> = callbackFlow {
         if (userId.isEmpty()) {
@@ -61,7 +79,7 @@ class FirestoreRepository(
     }
 
     /**
-     * Admin Panel: Add or Update Media Entry
+     * Admin: Save or update Media Item
      */
     suspend fun saveMediaItem(media: MediaItem): Result<String> {
         return try {
@@ -80,34 +98,6 @@ class FirestoreRepository(
 
             docRef.set(itemToSave).await()
             Result.success(docRef.id)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Admin Panel: Delete Media Entry
-     */
-    suspend fun deleteMediaItem(mediaId: String): Result<Unit> {
-        return try {
-            firestore.collection("media").document(mediaId).delete().await()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Admin Panel: List all subscriptions
-     */
-    suspend fun getAllSubscriptions(): Result<List<SubscriptionTransaction>> {
-        return try {
-            val snapshot = firestore.collection("subscriptions")
-                .orderBy("activatedAt", Query.Direction.DESCENDING)
-                .get()
-                .await()
-            val list = snapshot.documents.mapNotNull { it.toObject(SubscriptionTransaction::class.java) }
-            Result.success(list)
         } catch (e: Exception) {
             Result.failure(e)
         }

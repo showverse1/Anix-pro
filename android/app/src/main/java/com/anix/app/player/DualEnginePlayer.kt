@@ -1,6 +1,7 @@
 package com.anix.app.player
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
@@ -13,20 +14,23 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,26 +39,16 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.anix.app.data.model.MediaItem as AnixMediaItem
-import com.anix.app.data.model.StreamType
 import com.anix.app.ui.theme.*
 import kotlinx.coroutines.delay
 
-enum class PlayerResizeMode(val label: String, val mode: Int) {
-    FIT("Fit 16:9", AspectRatioFrameLayout.RESIZE_MODE_FIT),
-    FILL("Fill / Zoom", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
-    STRETCH("Stretch", AspectRatioFrameLayout.RESIZE_MODE_FILL)
-}
-
-/**
- * Dual-Engine Video Player:
- * Automatically routes to Native Media3 ExoPlayer for DIRECT & HLS streams,
- * or Sandboxed Anti-Ad Hybrid WebView for Abyss / Mux / Demux / ECDN embeds.
- */
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(UnstableApi::class)
 @Composable
@@ -65,23 +59,33 @@ fun DualEnginePlayer(
     onBackClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val isNativeEngine = media.streamType.equals(StreamType.DIRECT.name, ignoreCase = true) ||
-                         media.streamType.equals(StreamType.HLS.name, ignoreCase = true)
+    val activity = context as? Activity
+    
+    // Unlock peak refresh rate & keep screen on
+    DisposableEffect(Unit) {
+        activity?.let { SystemDisplayHelper.unlockPeakRefreshRate(it) }
+        onDispose {
+            activity?.let { SystemDisplayHelper.clearScreenOn(it) }
+        }
+    }
 
-    var currentQuality by remember { mutableStateOf("1080p") }
+    val isNativeEngine = media.streamType.equals("DIRECT", ignoreCase = true) ||
+            media.streamType.equals("HLS", ignoreCase = true) ||
+            media.streamType.equals("ARCHIVE", ignoreCase = true)
+
+    var currentQuality by remember { mutableStateOf("1080p FHD") }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
-    var currentResizeMode by remember { mutableStateOf(PlayerResizeMode.FIT) }
+    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var showControls by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(true) }
+    var isLocked by remember { mutableStateOf(false) }
     var currentPositionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
-    var blockedAdsCount by remember { mutableIntStateOf(0) }
 
-    // Auto-hide controls after 4 seconds
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
-            delay(4000)
+    // Auto-hide controls
+    LaunchedEffect(showControls, isPlaying, isLocked) {
+        if (showControls && isPlaying && !isLocked) {
+            delay(3800)
             showControls = false
         }
     }
@@ -93,54 +97,65 @@ fun DualEnginePlayer(
             .background(Color.Black)
     ) {
         if (isNativeEngine) {
-            // ==========================================
-            // ENGINE A: Native Media3 ExoPlayer Engine
-            // ==========================================
+            // Low-Latency Tuned LoadControl (1000ms start, 15s-60s read-ahead buffer)
+            val loadControl = remember {
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        15000, // min buffer
+                        60000, // max buffer
+                        1000,  // buffer for playback start
+                        2000   // buffer for playback after rebuffer
+                    )
+                    .build()
+            }
+
+            // Hardware Decoder Fallback Enabled
+            val renderersFactory = remember {
+                DefaultRenderersFactory(context)
+                    .setEnableDecoderFallback(true)
+                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            }
+
             val trackSelector = remember { DefaultTrackSelector(context) }
             val exoPlayer = remember {
-                ExoPlayer.Builder(context)
+                ExoPlayer.Builder(context, renderersFactory)
                     .setTrackSelector(trackSelector)
+                    .setLoadControl(loadControl)
                     .build().apply {
                         playWhenReady = true
                     }
             }
 
-            // Setup MediaItem with multi-quality & subtitles
             LaunchedEffect(media, currentQuality) {
                 val streamUrl = when (currentQuality) {
-                    "480p" -> media.videoUrl480p.ifEmpty { media.videoUrl }
-                    "720p" -> media.videoUrl720p.ifEmpty { media.videoUrl }
-                    "1080p" -> media.videoUrl1080p.ifEmpty { media.videoUrl }
+                    "480p SD" -> media.videoUrl480p.ifEmpty { media.videoUrl }
+                    "720p HD" -> media.videoUrl720p.ifEmpty { media.videoUrl }
+                    "1080p FHD" -> media.videoUrl1080p.ifEmpty { media.videoUrl }
                     else -> media.videoUrl
                 }
 
                 if (streamUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(streamUrl))
-                    
-                    // Inject Subtitle tracks if present
                     if (media.subtitles.isNotEmpty()) {
-                        val subtitleConfigs = media.subtitles.map { sub ->
+                        val subConfigs = media.subtitles.map { sub ->
                             MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))
                                 .setMimeType(MimeTypes.TEXT_VTT)
-                                .setLanguage(sub.code)
+                                .setLanguage(sub.languageCode)
                                 .setLabel(sub.language)
                                 .setSelectionFlags(if (sub.isDefault) C.SELECTION_FLAG_DEFAULT else 0)
                                 .build()
                         }
-                        mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
+                        mediaItemBuilder.setSubtitleConfigurations(subConfigs)
                     }
-
                     exoPlayer.setMediaItem(mediaItemBuilder.build())
                     exoPlayer.prepare()
                 }
             }
 
-            // Speed controller
             LaunchedEffect(currentSpeed) {
                 exoPlayer.playbackParameters = PlaybackParameters(currentSpeed)
             }
 
-            // Sync playback position
             LaunchedEffect(exoPlayer) {
                 while (true) {
                     currentPositionMs = exoPlayer.currentPosition
@@ -151,120 +166,85 @@ fun DualEnginePlayer(
             }
 
             DisposableEffect(Unit) {
-                onDispose {
-                    exoPlayer.release()
-                }
+                onDispose { exoPlayer.release() }
             }
 
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         player = exoPlayer
-                        useController = false // Use custom Compose overlay
-                        resizeMode = currentResizeMode.mode
+                        useController = false
+                        this.resizeMode = resizeMode
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
                     }
                 },
-                update = { view ->
-                    view.resizeMode = currentResizeMode.mode
-                },
+                update = { view -> view.resizeMode = resizeMode },
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { showControls = !showControls },
-                            onDoubleTap = { offset ->
-                                val width = size.width
-                                if (offset.x < width / 2) {
-                                    // Left double tap: seek -10s
-                                    val newPos = (exoPlayer.currentPosition - 10000L).coerceAtLeast(0L)
-                                    exoPlayer.seekTo(newPos)
-                                    doubleTapFeedback = "⏪ -10s"
-                                } else {
-                                    // Right double tap: seek +10s
-                                    val newPos = (exoPlayer.currentPosition + 10000L).coerceAtMost(exoPlayer.duration)
-                                    exoPlayer.seekTo(newPos)
-                                    doubleTapFeedback = "⏩ +10s"
+                    .pointerInput(isLocked) {
+                        if (!isLocked) {
+                            detectTapGestures(
+                                onTap = { showControls = !showControls },
+                                onDoubleTap = { offset ->
+                                    // Silent instant double-tap seek (+10s / -10s) without intrusive text overlay
+                                    val width = size.width
+                                    if (offset.x < width / 2) {
+                                        exoPlayer.seekTo((exoPlayer.currentPosition - 10000L).coerceAtLeast(0L))
+                                    } else {
+                                        exoPlayer.seekTo((exoPlayer.currentPosition + 10000L).coerceAtMost(exoPlayer.duration))
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
             )
-
         } else {
-            // ==========================================
-            // ENGINE B: Sandboxed Anti-Ad Hybrid WebView Engine
-            // (Abyss, Mux, Demux, ECDN)
-            // ==========================================
-            val embedUrl = media.videoUrl
-            val hostDomain = remember(embedUrl) {
-                try { Uri.parse(embedUrl).host ?: "" } catch (e: Exception) { "" }
+            // Sandboxed WebView Fallback View
+            val hostDomain = remember(media.videoUrl) {
+                try { Uri.parse(media.videoUrl).host ?: "" } catch (e: Exception) { "" }
             }
-
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
-                            mediaPlaybackRequiresUserGesture = false
-                            loadsImagesAutomatically = true
-                            // Anti-ad strict rule 1: Disable multi-window popups
                             setSupportMultipleWindows(false)
-                            javaScriptCanOpenWindowsAutomatically = false
-                            cacheMode = WebSettings.LOAD_DEFAULT
                         }
-
-                        // Anti-ad strict rule 2 & 3: Custom sandboxed client
-                        webViewClient = AntiAdWebViewClient(
-                            allowedHostDomain = hostDomain,
-                            isVipUser = isVip,
-                            onAdBlocked = { blockedAdsCount++ }
-                        )
-
+                        webViewClient = AntiAdWebViewClient(hostDomain, isVip)
                         webChromeClient = WebChromeClient()
-                        loadUrl(embedUrl)
+                        loadUrl(media.videoUrl)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
         }
 
-        // Double-tap visual ripple indicator
-        LaunchedEffect(doubleTapFeedback) {
-            if (doubleTapFeedback != null) {
-                delay(800)
-                doubleTapFeedback = null
-            }
-        }
-        if (doubleTapFeedback != null) {
+        // Lock Toggle Floating Button if locked
+        if (isLocked) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .background(Color(0xCC12121E), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                    .fillMaxSize()
+                    .padding(16.dp),
+                contentAlignment = Alignment.TopEnd
             ) {
-                Text(
-                    text = doubleTapFeedback ?: "",
-                    color = AnixPrimaryNeonCrimson,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                IconButton(
+                    onClick = { isLocked = false },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color(0xCC12121E), CircleShape)
+                ) {
+                    Icon(Icons.Default.Lock, contentDescription = "Unlock", tint = AnixPrimaryNeonCrimson)
+                }
             }
         }
 
-        // ==========================================
-        // COMPOSE PLAYER OVERLAY CONTROLS
-        // ==========================================
+        // Icon-Only Minimalist Controls Overlay
         AnimatedVisibility(
-            visible = showControls,
+            visible = showControls && !isLocked,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxSize()
@@ -274,16 +254,12 @@ fun DualEnginePlayer(
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
-                            listOf(
-                                Color(0xCC09090D),
-                                Color.Transparent,
-                                Color(0xEE09090D)
-                            )
+                            listOf(Color(0xCC09090D), Color.Transparent, Color(0xEE09090D))
                         )
                     )
                     .padding(12.dp)
             ) {
-                // Top bar: Back button, Title, Engine & VIP badge
+                // Top Bar: Back, Title/Episode, Circular Glass Buttons (36dp)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -291,138 +267,187 @@ fun DualEnginePlayer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onBackClick) {
-                            Icon(
-                                Icons.Default.ArrowBack,
-                                contentDescription = "Back",
-                                tint = Color.White
-                            )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        IconButton(
+                            onClick = onBackClick,
+                            modifier = Modifier.size(36.dp).background(Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Column {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = media.title,
                                 color = Color.White,
-                                fontSize = 15.sp,
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Stream: ${media.streamType} • Engine: ${if (isNativeEngine) "Media3 ExoPlayer" else "Sandboxed WebView"}",
-                                color = AnixTextSecondary,
-                                fontSize = 11.sp
+                                text = "Engine: ${media.streamType} • 144Hz Peak",
+                                color = AnixCyan,
+                                fontSize = 10.sp
                             )
                         }
                     }
 
-                    // VIP Ad-Shield Badge
-                    if (isVip) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = AnixVipGold.copy(alpha = 0.2f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AnixVipGold)
+                    // 6 Circular Glass Buttons (36dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // 1. Aspect Ratio icon
+                        IconButton(
+                            onClick = {
+                                resizeMode = when (resizeMode) {
+                                    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                }
+                            },
+                            modifier = Modifier.size(36.dp).background(Color(0x33FFFFFF), CircleShape)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.Security,
-                                    contentDescription = null,
-                                    tint = AnixVipGold,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "VIP AD-SHIELD ON (${blockedAdsCount} Blocked)",
-                                    color = AnixVipGold,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Icon(Icons.Default.AspectRatio, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+
+                        // 2. Subtitles icon (glows Gold when active)
+                        IconButton(
+                            onClick = { },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(if (media.subtitles.isNotEmpty()) AnixVipGold.copy(alpha = 0.25f) else Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.Default.ClosedCaption, contentDescription = null, tint = if (media.subtitles.isNotEmpty()) AnixVipGold else Color.White, modifier = Modifier.size(18.dp))
+                        }
+
+                        // 3. Quality icon (glows Gold on VIP stream)
+                        IconButton(
+                            onClick = {
+                                currentQuality = if (currentQuality == "1080p FHD") "720p HD" else if (currentQuality == "720p HD") "480p SD" else "1080p FHD"
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(if (currentQuality.contains("1080") || currentQuality.contains("720")) AnixVipGold.copy(alpha = 0.25f) else Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.Default.HighQuality, contentDescription = null, tint = if (currentQuality.contains("1080") || currentQuality.contains("720")) AnixVipGold else Color.White, modifier = Modifier.size(18.dp))
+                        }
+
+                        // 4. Speed icon
+                        IconButton(
+                            onClick = {
+                                currentSpeed = when (currentSpeed) {
+                                    1.0f -> 1.25f
+                                    1.25f -> 1.5f
+                                    1.5f -> 2.0f
+                                    else -> 1.0f
+                                }
+                            },
+                            modifier = Modifier.size(36.dp).background(Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.Default.Speed, contentDescription = null, tint = AnixCyan, modifier = Modifier.size(18.dp))
+                        }
+
+                        // 5. PiP icon
+                        IconButton(
+                            onClick = { },
+                            modifier = Modifier.size(36.dp).background(Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.Default.PictureInPictureAlt, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+
+                        // 6. Lock screen icon
+                        IconButton(
+                            onClick = { isLocked = true },
+                            modifier = Modifier.size(36.dp).background(Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.Default.LockOpen, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
 
-                // Bottom bar: Multi-Quality Selector, Speed, Aspect Ratio, Timeline
+                // Center Controls: Rewind 10s, 72dp Crimson Play/Pause, Forward 10s
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                ) {
+                    IconButton(
+                        onClick = { },
+                        modifier = Modifier.size(44.dp).background(Color(0x44000000), CircleShape)
+                    ) {
+                        Icon(Icons.Default.FastRewind, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(26.dp))
+                    }
+
+                    // 72dp Circular Crimson Play/Pause Button
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(AnixPrimaryNeonCrimson)
+                            .clickable { isPlaying = !isPlaying },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { },
+                        modifier = Modifier.size(44.dp).background(Color(0x44000000), CircleShape)
+                    ) {
+                        Icon(Icons.Default.FastForward, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(26.dp))
+                    }
+                }
+
+                // Bottom: 3dp Neon Scrubber, Time Display, SkipNext Icon Button
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
                 ) {
-                    // Playback actions
+                    // 3dp Neon Scrubber
+                    LinearProgressIndicator(
+                        progress = if (durationMs > 0) currentPositionMs.toFloat() / durationMs.toFloat() else 0f,
+                        color = AnixCyan,
+                        trackColor = Color(0x33FFFFFF),
+                        modifier = Modifier.fillMaxWidth().height(3.dp)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Quality Buttons (1080p, 720p, 480p)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("1080p", "720p", "480p").forEach { quality ->
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = if (currentQuality == quality) AnixPrimaryNeonCrimson else Color(0x33FFFFFF),
-                                    modifier = Modifier.clickable { currentQuality = quality }
-                                ) {
-                                    Text(
-                                        text = quality,
-                                        color = Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                        }
+                        Text(
+                            text = "${formatTime(currentPositionMs)} / ${formatTime(durationMs)}",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
 
-                        // Speed controller & Aspect Ratio switcher
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Speed Toggle (1.0x -> 1.25x -> 1.5x -> 2.0x)
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color(0x44FFFFFF),
-                                modifier = Modifier.clickable {
-                                    currentSpeed = when (currentSpeed) {
-                                        1.0f -> 1.25f
-                                        1.25f -> 1.5f
-                                        1.5f -> 2.0f
-                                        else -> 1.0f
-                                    }
-                                }
-                            ) {
-                                Text(
-                                    text = "${currentSpeed}x",
-                                    color = AnixCyan,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-
-                            // Aspect Ratio switcher
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color(0x44FFFFFF),
-                                modifier = Modifier.clickable {
-                                    currentResizeMode = when (currentResizeMode) {
-                                        PlayerResizeMode.FIT -> PlayerResizeMode.FILL
-                                        PlayerResizeMode.FILL -> PlayerResizeMode.STRETCH
-                                        PlayerResizeMode.STRETCH -> PlayerResizeMode.FIT
-                                    }
-                                }
-                            ) {
-                                Text(
-                                    text = currentResizeMode.label,
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
+                        // Circular SkipNext button
+                        IconButton(
+                            onClick = { },
+                            modifier = Modifier.size(32.dp).background(Color(0x33FFFFFF), CircleShape)
+                        ) {
+                            Icon(Icons.Default.SkipNext, contentDescription = "Next Episode", tint = Color.White, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
             }
         }
     }
+}
+
+private fun formatTime(ms: Long): String {
+    val totalSec = ms / 1000
+    val min = totalSec / 60
+    val sec = totalSec % 60
+    return String.format("%02d:%02d", min, sec)
 }

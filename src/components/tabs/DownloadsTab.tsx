@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Download,
   Trash2,
@@ -10,20 +10,8 @@ import {
   ArrowDownToLine,
   Film
 } from 'lucide-react';
-import { MediaItem } from '../../types';
-
-interface DownloadedEpisode {
-  id: string;
-  mediaId: string;
-  title: string;
-  episodeNumber: number;
-  duration: string;
-  quality: string;
-  fileSizeBytes: number;
-  thumbnail: string;
-  downloadedAt: string;
-  media: MediaItem;
-}
+import { DownloadedItem, MediaItem } from '../../types';
+import { storageService } from '../../services/storageService';
 
 interface DownloadsTabProps {
   mediaList: MediaItem[];
@@ -38,71 +26,56 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
   isVip,
   onOpenSubscription,
 }) => {
-  // Pre-seed with downloaded episodes from sample catalog
-  const [downloads, setDownloads] = useState<DownloadedEpisode[]>([
-    {
-      id: 'dl-001',
-      mediaId: mediaList[0]?.id || 'anix-001',
-      title: 'Cyberpunk: Neon Genesis 2099',
-      episodeNumber: 1,
-      duration: '24m',
-      quality: '1080p Full HD',
-      fileSizeBytes: 472000000, // 472 MB
-      thumbnail:
-        mediaList[0]?.posterUrl ||
-        'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600',
-      downloadedAt: '2 hours ago',
-      media: mediaList[0],
-    },
-    {
-      id: 'dl-002',
-      mediaId: mediaList[2]?.id || 'anix-003',
-      title: 'Solo Shadow Hunter: Reborn',
-      episodeNumber: 1,
-      duration: '24m',
-      quality: '720p HD',
-      fileSizeBytes: 295000000, // 295 MB
-      thumbnail:
-        mediaList[2]?.posterUrl ||
-        'https://images.unsplash.com/photo-1563089145-599997674d42?w=600',
-      downloadedAt: 'Yesterday',
-      media: mediaList[2] || mediaList[0],
-    },
-  ]);
+  const [downloads, setDownloads] = useState<DownloadedItem[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const [downloadSuccessToast, setDownloadSuccessToast] = useState<string | null>(null);
+  const refreshDownloads = () => {
+    setDownloads(storageService.getDownloads());
+  };
+
+  useEffect(() => {
+    refreshDownloads();
+    const handleDownloadsChanged = () => refreshDownloads();
+    window.addEventListener('anix_downloads_changed', handleDownloadsChanged);
+    return () => window.removeEventListener('anix_downloads_changed', handleDownloadsChanged);
+  }, []);
 
   const totalUsedMb = Math.round(
     downloads.reduce((acc, curr) => acc + curr.fileSizeBytes, 0) / (1024 * 1024)
   );
 
-  const handleDeleteDownload = (id: string) => {
-    setDownloads((prev) => prev.filter((d) => d.id !== id));
+  const handleDelete = (id: string, title: string) => {
+    storageService.deleteDownload(id);
+    setToastMessage(`Deleted "${title}" from offline storage.`);
+    setTimeout(() => setToastMessage(null), 2500);
   };
 
-  const handleDownloadNew = (media: MediaItem) => {
-    if (downloads.some((d) => d.mediaId === media.id)) {
-      setDownloadSuccessToast(`"${media.title}" is already in your offline downloads!`);
-      setTimeout(() => setDownloadSuccessToast(null), 2500);
+  const handleDownloadFromCatalog = (media: MediaItem) => {
+    if (!isVip) {
+      onOpenSubscription();
       return;
     }
 
-    const newDownload: DownloadedEpisode = {
-      id: `dl-${Date.now()}`,
+    const firstEp = media.episodes[0];
+    const newDl: DownloadedItem = {
+      id: `dl-${media.id}-${Date.now()}`,
       mediaId: media.id,
       title: media.title,
-      episodeNumber: 1,
-      duration: '24m',
-      quality: isVip ? '1080p VIP Master' : '720p Standard',
-      fileSizeBytes: isVip ? 480000000 : 280000000,
+      altTitle: media.altTitle,
+      episodeId: firstEp?.id || 'ep-1',
+      episodeNumber: firstEp?.episodeNumber || 1,
+      seasonNumber: firstEp?.seasonNumber || 1,
+      quality: '1080p FHD',
+      fileSizeBytes: 480 * 1024 * 1024,
       thumbnail: media.posterUrl,
       downloadedAt: 'Just now',
+      videoUrl: firstEp?.videoUrl || media.videoUrl,
       media,
     };
 
-    setDownloads([newDownload, ...downloads]);
-    setDownloadSuccessToast(`Downloaded "${media.title}" for offline playback!`);
-    setTimeout(() => setDownloadSuccessToast(null), 3000);
+    storageService.saveDownload(newDl);
+    setToastMessage(`Saved "${media.title}" to /ANIX offline storage!`);
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
   return (
@@ -111,29 +84,29 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-cyber font-bold text-white text-base tracking-wide flex items-center gap-2">
-            OFFLINE DOWNLOADS
-            <span className="text-[10px] font-mono text-[#00E676] bg-[#00E676]/10 px-2 py-0.5 rounded border border-[#00E676]/30">
-              OFFLINE READY
+            VIP DOWNLOAD MANAGER
+            <span className="text-[10px] font-mono text-[#00E5FF] bg-[#00E5FF]/10 px-2 py-0.5 rounded border border-[#00E5FF]/30">
+              OFFLINE STORAGE
             </span>
           </h2>
           <p className="text-[11px] text-slate-400">
-            Stream anytime without internet, mobile data, or buffering.
+            Stream high-bitrate anime without internet, buffering, or data usage.
           </p>
         </div>
 
         <div className="text-right">
-          <span className="text-xs font-mono font-bold text-[#00F0FF]">
+          <span className="text-xs font-mono font-bold text-[#FFD700]">
             {downloads.length} Episode{downloads.length === 1 ? '' : 's'}
           </span>
         </div>
       </div>
 
-      {/* Storage Meter Bar */}
+      {/* Internal Device Storage Meter */}
       <div className="p-3.5 rounded-2xl bg-[#12121E] border border-white/10 space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-slate-300 font-bold flex items-center gap-1.5">
-            <HardDrive size={14} className="text-[#00F0FF]" />
-            <span>Internal Device Storage</span>
+            <HardDrive size={14} className="text-[#00E5FF]" />
+            <span>Internal Device Storage (/ANIX)</span>
           </span>
           <span className="font-mono text-slate-400 text-[11px]">
             {totalUsedMb} MB / 64 GB used
@@ -141,35 +114,35 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
         </div>
         <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-[#00F0FF] to-[#FF2A55]"
-            style={{ width: `${Math.min(100, Math.max(5, (totalUsedMb / 1000) * 10))}%` }}
+            className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A55]"
+            style={{ width: `${Math.min(100, Math.max(8, (totalUsedMb / 1000) * 8))}%` }}
           />
         </div>
-        <div className="flex items-center justify-between text-[10px] text-slate-500">
+        <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
           <span>ANIX Downloads: {totalUsedMb} MB</span>
-          <span>Free Space: ~58.2 GB</span>
+          <span>Free Space: ~58.4 GB</span>
         </div>
       </div>
 
-      {/* Download Toast Notification */}
-      {downloadSuccessToast && (
-        <div className="p-2.5 rounded-xl bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2 animate-bounce">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="p-2.5 rounded-xl bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
           <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
-          <span>{downloadSuccessToast}</span>
+          <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* VIP Perks for Downloads */}
+      {/* VIP Gate Alert if Free User */}
       {!isVip && (
-        <div className="p-3.5 rounded-2xl bg-gradient-to-r from-[#1B1710] to-[#12121E] border border-[#FFD700]/30 flex items-center justify-between gap-3">
+        <div className="p-3.5 rounded-2xl bg-gradient-to-r from-[#1E1810] to-[#12121E] border border-[#FFD700]/40 flex items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-[#FFD700]/20 flex items-center justify-center text-[#FFD700] shrink-0">
-              <Crown size={16} />
+            <div className="w-9 h-9 rounded-full bg-[#FFD700]/20 flex items-center justify-center text-[#FFD700] shrink-0 border border-[#FFD700]/40">
+              <Crown size={18} />
             </div>
             <div className="text-xs">
-              <p className="font-bold text-white">Unlock 1080p High-Speed Downloads</p>
+              <p className="font-bold text-white">VIP-Gated Offline Downloads</p>
               <p className="text-[10px] text-slate-400">
-                VIP users get unlimited unthrottled downloads with WebVTT subtitles.
+                Offline chunk download is exclusive to VIP members. Unlock from ₹10.
               </p>
             </div>
           </div>
@@ -185,7 +158,7 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
       {/* Downloaded Episodes List */}
       <div className="space-y-2.5">
         <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-          Saved on Device
+          Saved on Device ({downloads.length})
         </h3>
 
         {downloads.length === 0 ? (
@@ -193,7 +166,7 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
             <ArrowDownToLine size={28} className="mx-auto text-slate-500" />
             <p className="text-xs font-bold text-white">No downloaded anime yet.</p>
             <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-              Tap the download button below to save any anime for offline streaming on the go.
+              Select an anime from the catalog below to save episodes for offline streaming on the go.
             </p>
           </div>
         ) : (
@@ -219,11 +192,16 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
 
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold text-white truncate">{item.title}</p>
-                  <p className="text-[11px] text-[#00F0FF] font-mono mt-0.5">
-                    EP {item.episodeNumber} • {item.duration}
+                  {item.altTitle && (
+                    <p className="text-[10px] text-[#FFD700] truncate font-medium">
+                      {item.altTitle}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-[#00E5FF] font-mono mt-0.5">
+                    EP {item.episodeNumber} • Season {item.seasonNumber}
                   </p>
                   <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
-                    <span className="px-1.5 py-0.2 rounded bg-white/5 border border-white/10 font-bold text-slate-300">
+                    <span className="px-1.5 py-0.2 rounded bg-white/5 border border-white/10 font-bold text-[#00E5FF]">
                       {item.quality}
                     </span>
                     <span>{Math.round(item.fileSizeBytes / (1024 * 1024))} MB</span>
@@ -242,7 +220,7 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
                   <Play size={15} className="fill-[#FF2A55]" />
                 </button>
                 <button
-                  onClick={() => handleDeleteDownload(item.id)}
+                  onClick={() => handleDelete(item.id, item.title)}
                   className="w-8 h-8 rounded-xl bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 flex items-center justify-center transition"
                   title="Delete Download"
                 >
@@ -258,7 +236,7 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
       <div className="pt-2 space-y-2">
         <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
           <Film size={13} className="text-[#FF2A55]" />
-          <span>Save More from Catalog</span>
+          <span>Save Episodes from Catalog</span>
         </h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {mediaList.slice(0, 4).map((media) => (
@@ -272,11 +250,18 @@ export const DownloadsTab: React.FC<DownloadsTabProps> = ({
                   alt={media.title}
                   className="w-8 h-10 object-cover rounded-lg shrink-0 bg-black"
                 />
-                <span className="text-xs text-white truncate font-medium">{media.title}</span>
+                <div className="truncate">
+                  <span className="text-xs text-white truncate font-medium block">
+                    {media.title}
+                  </span>
+                  <span className="text-[10px] text-[#FFD700] truncate block">
+                    {media.altTitle}
+                  </span>
+                </div>
               </div>
               <button
-                onClick={() => handleDownloadNew(media)}
-                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[#00F0FF] text-[11px] font-bold border border-[#00F0FF]/30 flex items-center gap-1 shrink-0"
+                onClick={() => handleDownloadFromCatalog(media)}
+                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[#00E5FF] text-[11px] font-bold border border-[#00E5FF]/30 flex items-center gap-1 shrink-0"
               >
                 <Download size={11} />
                 <span>Save</span>

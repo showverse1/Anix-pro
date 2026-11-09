@@ -11,9 +11,10 @@ import { UpiSubscriptionModal } from './components/UpiSubscriptionModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { CodeInspectorModal } from './components/CodeInspectorModal';
 import { CicdGuideModal } from './components/CicdGuideModal';
+import { AppUpdateModal } from './components/AppUpdateModal';
 import { storageService } from './services/storageService';
 import { exportAndroidProjectZip } from './services/zipExporter';
-import { MediaItem } from './types';
+import { AppUpdateInfo, MediaItem } from './types';
 
 export default function App() {
   const [viewMode, setViewMode] = useState<'mobile' | 'tablet' | 'full'>('mobile');
@@ -30,11 +31,23 @@ export default function App() {
   const [isCodeInspectorOpen, setIsCodeInspectorOpen] = useState<boolean>(false);
   const [isCicdGuideOpen, setIsCicdGuideOpen] = useState<boolean>(false);
 
-  // Load initial data & register storage change listeners
+  // In-App Remote Update Notification State (/app_updates/latest)
+  const currentDeviceVersionCode = 100; // Device currently on v1.0.0 (Build 100)
+  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo>(storageService.getAppUpdate());
+  const [isAppUpdateOpen, setIsAppUpdateOpen] = useState<boolean>(false);
+
   const refreshData = () => {
+    // Strictly query & display PUBLISHED items only
     setMediaList(storageService.getMediaItems());
     const userSub = storageService.getUserSubscription();
     setIsVip(userSub.isVip);
+    const update = storageService.getAppUpdate();
+    setAppUpdateInfo(update);
+
+    // If broadcast is active and device is older version, trigger update dialog
+    if (update.broadcastActive && currentDeviceVersionCode < update.versionCode) {
+      setIsAppUpdateOpen(true);
+    }
   };
 
   useEffect(() => {
@@ -45,13 +58,22 @@ export default function App() {
       const sub = storageService.getUserSubscription();
       setIsVip(sub.isVip);
     };
+    const handleUpdateChange = () => {
+      const update = storageService.getAppUpdate();
+      setAppUpdateInfo(update);
+      if (update.broadcastActive && currentDeviceVersionCode < update.versionCode) {
+        setIsAppUpdateOpen(true);
+      }
+    };
 
     window.addEventListener('anix_media_changed', handleMediaChange);
     window.addEventListener('anix_sub_changed', handleSubChange);
+    window.addEventListener('anix_app_update_changed', handleUpdateChange);
 
     return () => {
       window.removeEventListener('anix_media_changed', handleMediaChange);
       window.removeEventListener('anix_sub_changed', handleSubChange);
+      window.removeEventListener('anix_app_update_changed', handleUpdateChange);
     };
   }, []);
 
@@ -70,7 +92,6 @@ export default function App() {
       return;
     }
     setCurrentTab(tab);
-    // If a video is playing, close video overlay to show the chosen tab
     if (activeMediaForPlayback) {
       setActiveMediaForPlayback(null);
     }
@@ -87,7 +108,7 @@ export default function App() {
       onToggleVip={handleToggleVipDirect}
       onOpenAdmin={() => setIsAdminDashboardOpen(true)}
     >
-      {/* If a media is actively selected for playback, render DualEnginePlayerView */}
+      {/* Active Video Player View */}
       {activeMediaForPlayback ? (
         <DualEnginePlayerView
           media={activeMediaForPlayback}
@@ -96,9 +117,9 @@ export default function App() {
           onOpenSubscription={() => setIsSubscriptionModalOpen(true)}
         />
       ) : (
-        /* Main Android Screen Container with Active Tab & Bottom Navigation */
+        /* Main Navigation Screen */
         <div className="flex-1 flex flex-col bg-[#09090D] overflow-hidden relative">
-          {/* Top Bar (Shown on Home and Search) */}
+          {/* Top Bar on Home */}
           {currentTab === 'home' && (
             <CyberpunkNavbar
               isVip={isVip}
@@ -116,7 +137,7 @@ export default function App() {
             />
           )}
 
-          {/* Active Tab Screen */}
+          {/* Active Screen Tab */}
           <div className="flex-1 overflow-y-auto flex flex-col relative scrollbar-none">
             {currentTab === 'home' && (
               <HomeTab
@@ -161,15 +182,23 @@ export default function App() {
             )}
           </div>
 
-          {/* Android Bottom Navigation Bar (Home, Search, Downloads, VIP, Profile) */}
+          {/* Bottom Navigation Bar */}
           <BottomNavBar
             currentTab={currentTab}
             onSelectTab={handleTabSelect}
             isVip={isVip}
-            downloadsCount={2}
+            downloadsCount={storageService.getDownloads().length}
           />
         </div>
       )}
+
+      {/* In-App Remote Update Notification Modal (/app_updates/latest) */}
+      <AppUpdateModal
+        updateInfo={appUpdateInfo}
+        currentDeviceVersionCode={currentDeviceVersionCode}
+        isOpen={isAppUpdateOpen}
+        onDismiss={() => setIsAppUpdateOpen(false)}
+      />
 
       {/* Zero-Cost Direct UPI Subscription Modal */}
       <UpiSubscriptionModal

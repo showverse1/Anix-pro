@@ -66,16 +66,48 @@ fun DownloadsScreen(isVip: Boolean, onMediaSelect: (MediaItem) -> Unit, onVipUpg
 }`
   },
   {
-    name: 'ProfileScreen.kt',
-    path: 'app/src/main/java/com/anix/app/ui/screens/ProfileScreen.kt',
+    name: 'SystemDisplayHelper.kt',
+    path: 'app/src/main/java/com/anix/app/player/SystemDisplayHelper.kt',
     language: 'kotlin',
-    content: `// ProfileScreen.kt - User identity, VIP status, watch history & admin portal
-package com.anix.app.ui.screens
+    content: `// SystemDisplayHelper.kt - 90Hz/120Hz/144Hz Peak Display Refresh Rate & Screen-On
+package com.anix.app.player
 
-@Composable
-fun ProfileScreen(userId: String, isVip: Boolean, onVipUpgradeClick: () -> Unit, onAdminClick: () -> Unit) {
-    // User profile, VIP active timer, preferences & admin launcher
+import android.app.Activity
+import android.os.Build
+import android.view.WindowManager
+
+object SystemDisplayHelper {
+    fun unlockPeakRefreshRate(activity: Activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val display = activity.display ?: return
+            var highest = display.mode
+            for (mode in display.supportedModes) {
+                if (mode.refreshRate > highest.refreshRate) highest = mode
+            }
+            val params = activity.window.attributes
+            params.preferredDisplayModeId = highest.modeId
+            activity.window.attributes = params
+        }
+        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 }`
+  },
+  {
+    name: 'AppUpdateManager.kt',
+    path: 'app/src/main/java/com/anix/app/data/model/AppUpdateInfo.kt',
+    language: 'kotlin',
+    content: `// AppUpdateInfo.kt - In-App Remote Update Notification System (/app_updates/latest)
+package com.anix.app.data.model
+
+data class AppUpdateInfo(
+    val versionCode: Int = 102,
+    val versionName: String = "v2.4.0-Cyberpunk",
+    val title: String = "ANIX Hyper-Update Available ⚡",
+    val changelog: String = "• 144Hz Peak Refresh Rate\\n• VIP Batch Downloader\\n• In-App UPI QR Code",
+    val downloadUrl: String = "https://github.com/...",
+    val forceUpdate: Boolean = false,
+    val broadcastActive: Boolean = true
+)`
   },
   {
     name: 'AntiAdWebViewClient.kt',

@@ -210,7 +210,12 @@ dependencies {
   screensFolder?.file('DownloadsScreen.kt', `// Offline storage meter & downloaded episodes`);
   screensFolder?.file('ProfileScreen.kt', `// User profile, VIP active timer & settings`);
   screensFolder?.file('SubscriptionScreen.kt', `// Zero-cost UPI payment intent & UTR check`);
-  screensFolder?.file('AdminDashboardScreen.kt', `// Hidden /admin portal for multi-stream injection`);
+  screensFolder?.file('AdminDashboardScreen.kt', `// Hidden /admin portal for multi-stream injection & remote updates`);
+
+  const playerFolder = javaFolder?.folder('player');
+  playerFolder?.file('SystemDisplayHelper.kt', `package com.anix.app.player
+// 90Hz/120Hz/144Hz Peak Display Refresh Rate & Screen-On Controller
+`);
 
   // Firestore rules & README
   zip.file(
